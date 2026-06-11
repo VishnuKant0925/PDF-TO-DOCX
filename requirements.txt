@@ -1,0 +1,16 @@
+# Core OCR engine
+paddlepaddle              # PaddlePaddle framework (CPU; use paddlepaddle-gpu for NVIDIA GPU)
+paddleocr<3               # PaddleOCR v2.x (v3+ drags in paddlex/torch)
+
+# PDF handling
+pymupdf                   # PDF rendering to images
+
+# Image processing
+opencv-python             # Image preprocessing (grayscale, threshold, denoise)
+numpy                     # Array operations
+Pillow                    # Image format handling
+scikit-image              # Required by PaddleOCR for morphology ops
+albumentations            # Required by PaddleOCR for augmentation
+
+# DOCX generation
+python-docx               # Create Word documents

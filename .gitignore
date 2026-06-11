@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Debug & output files
+debug/
+*.docx
+
+# Large binary files
+*.pdf
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Byte-compiled
+*.pyc
