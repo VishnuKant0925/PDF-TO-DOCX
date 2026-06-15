@@ -22,6 +22,12 @@ sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from pipeline import renderer, layout_analyzer, postprocessor, docx_builder
 from pipeline import ocr_surya
 
+if ocr_surya is None:
+    print("  [ERROR] Could not load Surya OCR module.")
+    print("  Make sure surya-ocr is installed: pip install surya-ocr")
+    print("  Also check that PyTorch is installed with CUDA support.")
+    sys.exit(1)
+
 
 def parse_arguments():
     """Parse command-line arguments."""
