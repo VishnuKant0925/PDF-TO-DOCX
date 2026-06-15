@@ -20,8 +20,15 @@ from . import docx_builder
 # Import OCR engines conditionally — only the one in use needs to load
 try:
     from . import ocr_surya
-except ImportError:
+except ImportError as e:
+    import warnings
+    warnings.warn(f"Could not import ocr_surya: {e}")
     ocr_surya = None
+except Exception as e:
+    # Don't silently swallow non-ImportError exceptions (e.g. CUDA errors)
+    import warnings
+    warnings.warn(f"ocr_surya import failed with unexpected error: {e}")
+    raise
 
 try:
     from . import ocr_engine

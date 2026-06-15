@@ -6,17 +6,25 @@ original scanned Hindi scientific dictionary:
 
     - Two-column page layout using Word section columns (w:cols XML)
     - Three sub-fields per entry: English term (bold) | Subject codes (italic) | Hindi translation
-    - Page header as centered text (guide words + page number)
+    - Page header via Word's built-in header mechanism (guide words + page number)
+    - Tab-stop alignment for sub-column positioning
     - Compact paragraph spacing to match dense dictionary layout
     - Matching fonts: Times New Roman for English, Mangal for Hindi
+    - Column divider line (w:sep) between the two columns
 
 Uses python-docx with low-level OxmlElement manipulation for
 column support (not natively available in python-docx API).
+
+UNIT REFERENCE (Word OOXML):
+    - w:space, w:w in w:cols → twips (1 twip = 1/20 pt = 1/1440 inch)
+    - python-docx Cm/Pt/Inches → EMU (English Metric Units)
+    - 1 EMU = 1/914400 inch → 1 twip = 914400/1440 = 635 EMU
+    - Conversion: twips = int(emu_value / 635)
 """
 
 from docx import Document
 from docx.shared import Pt, Cm, Inches, Emu, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn, nsdecls
 from docx.oxml import parse_xml, OxmlElement
@@ -26,6 +34,21 @@ from docx.oxml import parse_xml, OxmlElement
 FONT_ENGLISH = "Times New Roman"   # Matches original serif font
 FONT_HINDI = "Mangal"              # Standard Devanagari font
 FONT_SUBJECT = "Times New Roman"   # Subject codes use same serif
+
+# ─── Unit conversion ─────────────────────────────────────────────
+EMU_PER_TWIP = 635  # 914400 EMU/inch ÷ 1440 twips/inch = 635
+
+
+def _emu_to_twips(emu_value) -> int:
+    """
+    Convert an EMU value (from Cm/Pt/Inches) to twips for Word XML attributes.
+
+    Word OOXML attributes like w:space, w:w in w:cols expect twips.
+    python-docx's Cm(), Pt(), Inches() return EMU values.
+
+    1 twip = 1/20 point = 1/1440 inch = 635 EMU
+    """
+    return int(int(emu_value) / EMU_PER_TWIP)
 
 
 def build_docx(
@@ -77,12 +100,9 @@ def build_docx(
             section.top_margin = Cm(1.5)
             section.bottom_margin = Cm(1.5)
 
-        # Page header (guide words + page number)
-        header = page_data.get("header", {})
-        _add_page_header(doc, header)
-
-        # Horizontal rule under header
-        _add_thin_rule(doc)
+        # Page header (guide words + page number) — using Word header
+        header_data = page_data.get("header", {})
+        _set_word_header(section, header_data)
 
         # Get entries and split into two columns
         entries = page_data.get("entries", [])
@@ -96,42 +116,72 @@ def build_docx(
         right_entries = entries[mid:]
 
         # Set up two-column layout for this section
-        _set_section_columns(doc, 2, spacing=Cm(0.8))
+        _set_section_columns(section, 2, spacing=Cm(0.8))
 
-        # Add left column entries
-        for entry in left_entries:
-            _add_dictionary_entry(doc, entry)
+        if mode == "table":
+            # Legacy table mode — add entries as a single full-width table
+            _add_entries_as_table(doc, entries)
+        else:
+            # Text mode — two-column flow with tab-stop alignment
+            # Add left column entries
+            for entry in left_entries:
+                _add_dictionary_entry(doc, entry)
 
-        # Column break to start right column
-        _add_column_break(doc)
+            # Column break to start right column
+            _add_column_break(doc)
 
-        # Add right column entries
-        for entry in right_entries:
-            _add_dictionary_entry(doc, entry)
+            # Add right column entries
+            for entry in right_entries:
+                _add_dictionary_entry(doc, entry)
 
     doc.save(output_path)
 
 
-def _add_page_header(doc: Document, header: dict):
+def _set_word_header(section, header_data: dict):
     """
-    Add the page header — guide words and page number.
+    Set the Word document header for a section.
 
-    Format: "left_word        page_number        right_word"
-    Centered, italic, gray text.
+    Format: left_guide_word     page_number     right_guide_word
+    Uses a center-aligned paragraph with bold gray text.
+    The header appears at the top of every page in this section.
     """
-    left = header.get("left_word", "")
-    page_num = header.get("page_number", "")
-    right = header.get("right_word", "")
+    left = header_data.get("left_word", "")
+    page_num = header_data.get("page_number", "")
+    right = header_data.get("right_word", "")
 
     if not any([left, page_num, right]):
         return
 
-    para = doc.add_paragraph()
+    # Access the section's header
+    doc_header = section.header
+    doc_header.is_linked_to_previous = False
+
+    # Clear any existing header content
+    for para in doc_header.paragraphs:
+        para.clear()
+
+    # Use the first paragraph (always exists)
+    if doc_header.paragraphs:
+        para = doc_header.paragraphs[0]
+    else:
+        para = doc_header.add_paragraph()
+
     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     para.paragraph_format.space_before = Pt(0)
     para.paragraph_format.space_after = Pt(2)
 
-    # Build header: left_word — page_number — right_word
+    # Add a bottom border to the header paragraph (thin rule)
+    pPr = para._element.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '4')       # 0.5pt line
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), 'C0C0C0')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+    # Build header text: left_word — page_number — right_word
     parts = []
     if left:
         parts.append(left)
@@ -149,38 +199,28 @@ def _add_page_header(doc: Document, header: dict):
     run.bold = True
 
 
-def _add_thin_rule(doc: Document):
-    """Add a thin horizontal rule paragraph after the header."""
-    para = doc.add_paragraph()
-    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    para.paragraph_format.space_before = Pt(0)
-    para.paragraph_format.space_after = Pt(4)
-
-    # Use a bottom border on the paragraph instead of text characters
-    pPr = para._element.get_or_add_pPr()
-    pBdr = OxmlElement('w:pBdr')
-    bottom = OxmlElement('w:bottom')
-    bottom.set(qn('w:val'), 'single')
-    bottom.set(qn('w:sz'), '4')       # 0.5pt line
-    bottom.set(qn('w:space'), '1')
-    bottom.set(qn('w:color'), 'C0C0C0')
-    pBdr.append(bottom)
-    pPr.append(pBdr)
-
-
 def _add_dictionary_entry(doc: Document, entry: dict):
     """
-    Add a single dictionary entry as a compact paragraph.
+    Add a single dictionary entry as a compact paragraph with tab-stop alignment.
 
-    Format: **English term**  Subject  Hindi translation
+    Format: **English term**\\tSubject\\tHindi translation
 
-    This matches the original layout where each row shows:
+    Tab stops create sub-column alignment within each Word column,
+    matching the original dictionary's visual layout where each row shows:
     English term (bold) | Subject codes (italic) | Hindi translation
     """
     para = doc.add_paragraph()
     para.paragraph_format.space_before = Pt(1)
     para.paragraph_format.space_after = Pt(1)
     para.paragraph_format.line_spacing = Pt(11)
+
+    # ── Set tab stops for sub-column alignment ──
+    # Within each Word column (~8.5cm wide after margins and spacing),
+    # position tab stops for Subject and Hindi fields.
+    # Tab 1: ~5.0cm from column left edge (subject codes)
+    # Tab 2: ~6.5cm from column left edge (Hindi translation)
+    _add_tab_stop(para, Cm(5.0), WD_TAB_ALIGNMENT.LEFT)
+    _add_tab_stop(para, Cm(6.5), WD_TAB_ALIGNMENT.LEFT)
 
     # ── English term (bold) ──
     english = entry.get("english_term", "").strip()
@@ -190,11 +230,11 @@ def _add_dictionary_entry(doc: Document, entry: dict):
         run_en.font.name = FONT_ENGLISH
         run_en.font.size = Pt(9)
 
-    # ── Subject codes (italic, gray) ──
+    # ── Tab → Subject codes (italic, gray) ──
     subject = entry.get("subject_codes", "").strip()
     if subject:
-        run_sep = para.add_run("  ")
-        run_sep.font.size = Pt(9)
+        run_tab1 = para.add_run("\t")
+        run_tab1.font.size = Pt(9)
 
         run_sub = para.add_run(subject)
         run_sub.italic = True
@@ -202,11 +242,11 @@ def _add_dictionary_entry(doc: Document, entry: dict):
         run_sub.font.size = Pt(8)
         run_sub.font.color.rgb = RGBColor(80, 80, 80)
 
-    # ── Hindi translation ──
+    # ── Tab → Hindi translation ──
     hindi = entry.get("hindi_translation", "").strip()
     if hindi:
-        run_sep2 = para.add_run("  ")
-        run_sep2.font.size = Pt(9)
+        run_tab2 = para.add_run("\t")
+        run_tab2.font.size = Pt(9)
 
         run_hi = para.add_run(hindi)
         run_hi.font.name = FONT_HINDI
@@ -214,26 +254,64 @@ def _add_dictionary_entry(doc: Document, entry: dict):
         # Set complex script font for proper Hindi rendering
         _set_run_cs_font(run_hi, FONT_HINDI, Pt(9))
 
-    # ── Notes (small, italic, gray) ──
+    # ── Notes (small, italic, gray) — on next line if present ──
     notes = entry.get("notes", "").strip()
     if notes:
-        run_note = para.add_run(f"  {notes}")
+        # Add a line break (soft return) and indent the note
+        run_br = para.add_run()
+        run_br.add_break()
+
+        run_indent = para.add_run("    ")  # visual indent
+        run_indent.font.size = Pt(7)
+
+        run_note = para.add_run(notes)
         run_note.font.size = Pt(7)
         run_note.font.color.rgb = RGBColor(120, 120, 120)
         run_note.italic = True
 
 
-def _set_section_columns(doc: Document, num_cols: int, spacing=Cm(0.6)):
+def _add_tab_stop(para, position, alignment):
     """
-    Set the current section to use multiple columns.
+    Add a tab stop to a paragraph at the given position.
+
+    Uses low-level XML since python-docx's tab_stops API can be finicky.
+
+    Args:
+        para: The paragraph object.
+        position: Position as an EMU value (e.g., Cm(5.0)).
+        alignment: WD_TAB_ALIGNMENT value.
+    """
+    pPr = para._element.get_or_add_pPr()
+
+    # Find or create w:tabs element
+    tabs = pPr.find(qn('w:tabs'))
+    if tabs is None:
+        tabs = OxmlElement('w:tabs')
+        pPr.append(tabs)
+
+    tab = OxmlElement('w:tab')
+    tab.set(qn('w:val'), 'left')
+    # Tab position must be in twips
+    tab.set(qn('w:pos'), str(_emu_to_twips(position)))
+    tabs.append(tab)
+
+
+def _set_section_columns(section, num_cols: int, spacing=Cm(0.6)):
+    """
+    Set the section to use multiple columns with proper Word XML.
 
     python-docx doesn't have native column support, so we
     manipulate the section's XML directly with w:cols element.
+
+    CRITICAL: w:space expects twips, NOT EMU. python-docx's Cm/Pt
+    return EMU values. We must convert: twips = EMU / 635.
+
+    Args:
+        section: The document section to modify.
+        num_cols: Number of columns (1, 2, or 3).
+        spacing: Inter-column spacing as a docx.shared length (e.g., Cm(0.8)).
     """
-    # Get the last section's sectPr
-    sections = doc.sections
-    last_section = sections[-1]
-    sect_pr = last_section._sectPr
+    sect_pr = section._sectPr
 
     # Remove existing cols element if any
     for existing_cols in sect_pr.findall(qn('w:cols')):
@@ -242,8 +320,18 @@ def _set_section_columns(doc: Document, num_cols: int, spacing=Cm(0.6)):
     # Create new cols element
     cols = OxmlElement('w:cols')
     cols.set(qn('w:num'), str(num_cols))
-    cols.set(qn('w:space'), str(int(spacing)))
+
+    # FIXED: Convert EMU → twips for w:space attribute.
+    # Before this fix, raw EMU (288000 for Cm(0.8)) was passed directly,
+    # which Word interpreted as 288000 twips = 200 inches of gap,
+    # collapsing all text to 1 character per line.
+    spacing_twips = _emu_to_twips(spacing)
+    cols.set(qn('w:space'), str(spacing_twips))
+
     cols.set(qn('w:equalWidth'), '1')
+
+    # Add vertical separator line between columns
+    cols.set(qn('w:sep'), '1')
 
     sect_pr.append(cols)
 
