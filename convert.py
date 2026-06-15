@@ -2,12 +2,12 @@
 convert.py — Hindi Dictionary PDF → DOCX Converter
 
 Main CLI entry point that orchestrates the full conversion pipeline:
-    PDF → Render → Preprocess → OCR → Layout → Post-process → DOCX
+    PDF → Render → OCR (Surya) → Layout → Post-process → DOCX
 
 Usage:
-    python convert.py input.pdf
-    python convert.py input.pdf -o output.docx --dpi 400 --pages 1-5 --debug
-    python convert.py input.pdf --columns 2 --format text --verbose
+    venv\\Scripts\\python.exe convert.py sample_dictionary.pdf
+    venv\\Scripts\\python.exe convert.py sample_dictionary.pdf -o output.docx --pages 1-5
+    venv\\Scripts\\python.exe convert.py sample_dictionary.pdf --debug --verbose
 """
 
 import argparse
@@ -15,13 +15,18 @@ import os
 import sys
 import time
 
-from pipeline import renderer, preprocessor, ocr_engine, layout_analyzer, postprocessor, docx_builder
+# Fix Windows console encoding for Hindi/Devanagari text
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+from pipeline import renderer, layout_analyzer, postprocessor, docx_builder
+from pipeline import ocr_surya
 
 
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Hindi Dictionary PDF → DOCX Converter",
+        description="Hindi Dictionary PDF → DOCX Converter (Surya OCR)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -61,14 +66,9 @@ Examples:
     )
     parser.add_argument(
         "--format",
-        default="table",
+        default="text",
         choices=["table", "text"],
-        help='Output format: "table" or "text" (default: table)',
-    )
-    parser.add_argument(
-        "--lang",
-        default="hi",
-        help="OCR language (default: hi — Hindi, also handles English)",
+        help='Output format: "table" or "text" (default: text)',
     )
     parser.add_argument(
         "--debug",
@@ -135,26 +135,6 @@ def parse_pages(page_spec: str, total_pages: int) -> list[int]:
     return sorted(pages)
 
 
-def check_gpu():
-    """Check if GPU is actually usable for PaddlePaddle (CUDA + cuDNN)."""
-    try:
-        import paddle
-        if not (paddle.device.is_compiled_with_cuda() and paddle.device.cuda.device_count() > 0):
-            return False
-        # Actually test GPU inference — catches missing cuDNN DLLs
-        paddle.device.set_device("gpu:0")
-        t = paddle.zeros([1], dtype="float32")
-        _ = t + 1
-        return True
-    except Exception:
-        try:
-            import paddle
-            paddle.device.set_device("cpu")
-        except Exception:
-            pass
-        return False
-
-
 def main():
     args = parse_arguments()
 
@@ -169,7 +149,7 @@ def main():
     # Banner
     print()
     print("=" * 62)
-    print("   Hindi Dictionary PDF -> DOCX Converter")
+    print("   Hindi Dictionary PDF -> DOCX Converter (Surya OCR)")
     print("=" * 62)
     print()
 
@@ -181,8 +161,6 @@ def main():
         print("  [ERROR] No valid pages to process")
         sys.exit(1)
 
-    gpu_available = check_gpu()
-
     print(f"  Input:      {args.input}")
     print(f"  Output:     {args.output}")
     print(f"  Pages:      {len(pages_to_process)} of {total_pages}", end="")
@@ -191,7 +169,6 @@ def main():
         print(f" (pages {display_pages})", end="")
     print()
     print(f"  DPI:        {args.dpi}")
-    print(f"  GPU:        {'Yes' if gpu_available else 'No (CPU mode)'}")
     print(f"  Format:     {args.format}")
     print(f"  Debug:      {'On' if args.debug else 'Off'}")
     print()
@@ -200,10 +177,10 @@ def main():
     if args.debug:
         os.makedirs("debug", exist_ok=True)
 
-    # Step 1: Initialize OCR engine
-    print("  [1/2] Initializing PaddleOCR...", end="", flush=True)
+    # Step 1: Initialize Surya OCR models
+    print("  [1/2] Loading Surya OCR models...", end="", flush=True)
     start_init = time.time()
-    ocr = ocr_engine.create_ocr(lang=args.lang, use_gpu=gpu_available)
+    models = ocr_surya.load_models()
     init_time = time.time() - start_init
     print(f" OK ({init_time:.1f}s)")
     print()
@@ -234,32 +211,22 @@ def main():
         if args.verbose:
             print(f" ({page_img['width_px']}x{page_img['height_px']}px)")
 
-        # Preprocess
-        if args.no_preprocess:
-            processed_img = page_img["image_np"]
-        else:
-            if args.verbose:
-                print("    -> Preprocessing...", end="", flush=True)
-            debug_path = f"debug/page_{page_num + 1:03d}" if args.debug else None
-            processed_img = preprocessor.preprocess(
-                page_img["image_np"],
-                debug_path=debug_path,
-            )
-            if args.verbose:
-                print(" OK")
-
-        # OCR
+        # OCR with Surya
         if args.verbose:
-            print("    -> Running OCR...", end="", flush=True)
-        ocr_results = ocr_engine.run_ocr(processed_img, ocr)
+            print("    -> Running Surya OCR...", end="", flush=True)
+        ocr_results = ocr_surya.run_ocr(
+            page_img["image_pil"],
+            models,
+            languages=["en", "hi"],
+        )
         if args.debug:
-            ocr_engine.save_ocr_visualization(
+            ocr_surya.save_ocr_visualization(
                 page_img["image_np"],
                 ocr_results,
                 f"debug/page_{page_num + 1:03d}_ocr_boxes.png",
             )
         if args.verbose:
-            stats = ocr_engine.get_confidence_stats(ocr_results)
+            stats = ocr_surya.get_confidence_stats(ocr_results)
             print(
                 f" {stats['total_count']} text regions"
                 f" (avg conf: {stats['avg_confidence']:.0%},"

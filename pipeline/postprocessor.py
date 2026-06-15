@@ -130,21 +130,32 @@ def clean_text_block(block: dict) -> dict | None:
 
 def fix_hindi_spacing(text: str) -> str:
     """
-    Remove incorrect spaces inserted within Devanagari words by OCR.
+    Remove incorrect spaces inserted WITHIN Devanagari words by OCR.
 
-    Example: "शब् दकोश" → "शब्दकोश"
-             "अव शोषण" → "अवशोषण"
+    Only fix broken conjuncts and separated matras/virama — do NOT
+    collapse spaces between separate Hindi words.
+
+    Example fixes:
+        "शब् दकोश" → "शब्दकोश"  (virama + space + consonant)
+        "अव शो षण"  → "अवशोषण"   (only when halant is involved)
+    
+    NOT fixed (correct spacing preserved):
+        "निरपेक्ष मान" stays as "निरपेक्ष मान" (two words)
     """
-    # Remove space between two Devanagari characters
-    text = re.sub(r"([\u0900-\u097F])\s+([\u0900-\u097F])", r"\1\2", text)
-    # Also handle matras/vowel signs that got separated
+    # Fix 1: Halant (virama ्) separated from the next consonant
+    # This is ALWAYS an OCR error — virama must join to the next consonant
+    text = re.sub(r"([\u094D])\s+([\\u0915-\u0939])", r"\1\2", text)
+    
+    # Fix 2: Vowel sign / matra separated from its consonant
+    # Matras (ा ि ी ु ू etc.) must be attached to the preceding consonant
     text = re.sub(
-        r"([\u0900-\u097F])\s+([\u093E-\u094F\u0962-\u0963])", r"\1\2", text
+        r"([\u0915-\u0939\u094D])\s+([\u093E-\u094F\u0962-\u0963])", r"\1\2", text
     )
-    # Handle halant (virama) separated from next consonant
-    text = re.sub(r"([\u094D])\s+([\u0915-\u0939])", r"\1\2", text)
-    # Run twice to catch cascading fixes
-    text = re.sub(r"([\u0900-\u097F])\s+([\u0900-\u097F])", r"\1\2", text)
+
+    # Fix 3: Anusvara (ं) or Chandrabindu (ँ) separated from preceding char
+    text = re.sub(
+        r"([\u0900-\u097F])\s+([\u0901\u0902\u0903])", r"\1\2", text
+    )
 
     return text
 
